@@ -1,12 +1,20 @@
 import os
+import random
 
-import yaml
+import numpy as np
 import torch
 import torch.distributed
-import random
-import numpy as np
-from accelerate import PartialState, DistributedType
+import yaml
+from accelerate import DistributedType, PartialState
 
+SUPPORTED_DATASETS_COMMON = [
+    "DanceTrack",
+    "DanceTrackToy",
+    "SportsMOT",
+    "SportsMOTToy",
+    "BFT",
+    "BFTToy",
+]
 
 accelerate_state = PartialState()
 

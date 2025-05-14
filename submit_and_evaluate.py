@@ -19,7 +19,7 @@ from models.misc import load_checkpoint
 from models.motip import build as build_motip
 from models.runtime_tracker import RuntimeTracker
 from runtime_option import runtime_option
-from utils.misc import yaml_to_dict
+from utils.misc import SUPPORTED_DATASETS_COMMON, yaml_to_dict
 
 
 def submit_and_evaluate(config: dict):
@@ -88,7 +88,6 @@ def submit_and_evaluate(config: dict):
         load_previous_checkpoint(model, path=config["INFERENCE_MODEL"])
 
     model = accelerator.prepare(model)
-
     metrics = submit_and_evaluate_one_model(
         is_evaluate=config["INFERENCE_MODE"] == "evaluate",
         accelerator=accelerator,
@@ -153,10 +152,12 @@ def submit_and_evaluate_one_model(
     area_thresh: int = 0,
     inference_only_detr: bool = False,
     dtype: str = "FP32",
+    epoch: int = 0,
 ):
     # Build the datasets:
     inference_dataset = dataset_classes[dataset](
         data_root=data_root,
+        sub_dir=dataset,
         split=data_split,
         load_annotation=True,
     )
@@ -252,26 +253,27 @@ def submit_and_evaluate_one_model(
         )
 
         if seq_idx < max_log:
+            #TODO fix last sequence only is logged
+            #print(sequence_name)
             mid_frame = len(sequence_loader) // 2
             gt_ann = gt_annotations[sequence_name][mid_frame]
             pred_ann = sequence_results[mid_frame]
-            orig_path = sequence_dataset.image_paths[sequence_name][mid_frame]
+            orig_path = sequence_dataset.image_paths[mid_frame]
             logger.log_images(
                 orig_path=orig_path,
                 gt_ann=gt_ann,
                 pred_ann=pred_ann,
+                global_step=epoch,
                 sequence_name=sequence_name,
                 frame_idx=mid_frame,
             )
             seq_idx += 1
 
         # Write the results to the submit file:
-        if dataset in [
-            "DanceTrack",
-            "SportsMOT",
+        if dataset in SUPPORTED_DATASETS_COMMON + [
             "MOT17",
+            "MOT17Toy",
             "PersonPath22_Inference",
-            "BFT",
         ]:
             sequence_tracker_results = []
             for t in range(len(sequence_results)):
@@ -323,7 +325,7 @@ def submit_and_evaluate_one_model(
                 only_main=True,
             )
             # Prepare for evaluation:
-            if dataset in ["DanceTrack", "SportsMOT", "MOT17", "BFT"]:
+            if dataset in SUPPORTED_DATASETS_COMMON + ["MOT17, MOT17Toy"]:
                 gt_dir = os.path.join(data_root, dataset, data_split)
                 tracker_dir = os.path.join(outputs_dir, "tracker")
             elif dataset in ["PersonPath22_Inference"]:
@@ -333,8 +335,8 @@ def submit_and_evaluate_one_model(
                 raise NotImplementedError(
                     f"Do not support to find the gt_dir for dataset '{dataset}'."
                 )
-            if dataset in ["DanceTrack", "SportsMOT", "BFT"] or (
-                dataset in ["MOT17"] and data_split == "test"
+            if dataset in SUPPORTED_DATASETS_COMMON or (
+                dataset in ["MOT17", "MOT17Toy"] and data_split == "test"
             ):
                 args = {
                     "--SPLIT_TO_EVAL": data_split,

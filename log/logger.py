@@ -7,6 +7,7 @@ import random
 from typing import Any, Dict, Optional
 
 import mlflow
+import torch
 import wandb
 import yaml
 from accelerate.state import PartialState
@@ -327,9 +328,9 @@ class Logger:
         orig_path: str,
         gt_ann: Dict[str, Any],
         pred_ann: Dict[str, Any],
+        global_step: int,
         sequence_name: str,
         frame_idx: int,
-        max_sequences: int = 5,
     ):
         """
         Log three views for a single frame:
@@ -345,7 +346,7 @@ class Logger:
         W, H = img.size
 
         # prepare output folder
-        img_dir = os.path.join(self.logdir, "images", sequence_name)
+        img_dir = os.path.join(self.logdir, "images", str(global_step), sequence_name)
         os.makedirs(img_dir, exist_ok=True)
 
         # utility: pick a random color per object
@@ -360,6 +361,7 @@ class Logger:
         for i, (bbox, mask_path, obj_id) in enumerate(
             zip(gt_ann["bbox"], gt_ann["mask_paths"], gt_ann["id"])
         ):
+            obj_id = obj_id.item()
             color = rand_color(obj_id)
             # paste mask
             mask = Image.open(mask_path).convert("L").resize((W, H))
@@ -374,6 +376,7 @@ class Logger:
         img_pb = img.copy()
         draw2 = ImageDraw.Draw(img_pb)
         for i, (bbox, obj_id) in enumerate(zip(pred_ann["bbox"], pred_ann["id"])):
+            obj_id = obj_id.item()
             color = rand_color(obj_id)
             x, y, w, h = bbox
             draw2.rectangle([x, y, x + w, y + h], outline=color, width=2)
@@ -383,13 +386,17 @@ class Logger:
         img_pm = img.copy()
         draw3 = ImageDraw.Draw(img_pm, "RGBA")
         for i, (mask_arr, obj_id) in enumerate(zip(pred_ann["masks"], pred_ann["id"])):
+            obj_id = obj_id.item()
             color = rand_color(obj_id)
-            mask = Image.fromarray((mask_arr * 255).astype("uint8")).resize((W, H))
+            mask_arr = mask_arr.cpu()
+            mask = Image.fromarray((mask_arr * 255).to(torch.uint8).numpy()).resize(
+                (W, H)
+            )
             overlay = Image.new("RGBA", (W, H), color + (128,))
             img_pm.paste(overlay, (0, 0), mask)
             # draw id
             # approximate box from mask
-            xs, ys = mask_arr.nonzero()
+            xs, ys = mask_arr.nonzero(as_tuple=True)
             if xs.size and ys.size:
                 x0, y0 = ys.min(), xs.min()
                 draw3.text((x0, y0 - 10), str(obj_id), fill=color, font=font)
@@ -407,31 +414,36 @@ class Logger:
             mlflow.log_image(
                 img_gt,
                 artifact_file=os.path.join(
-                    "images", sequence_name, os.path.basename(p_gt)
+                    "images", str(global_step), sequence_name, os.path.basename(p_gt)
                 ),
             )
             mlflow.log_image(
                 img_pb,
                 artifact_file=os.path.join(
-                    "images", sequence_name, os.path.basename(p_pb)
+                    "images", str(global_step), sequence_name, os.path.basename(p_pb)
                 ),
             )
             mlflow.log_image(
                 img_pm,
                 artifact_file=os.path.join(
-                    "images", sequence_name, os.path.basename(p_pm)
+                    "images", str(global_step), sequence_name, os.path.basename(p_pm)
                 ),
             )
 
         # log to W&B
         if self.wandb:
-            self.wandb.log({f"{sequence_name}/gt": wandb.Image(img_gt)}, commit=False)
             self.wandb.log(
-                {f"{sequence_name}/pred_boxes": wandb.Image(img_pb)}, commit=False
+                {f"{global_step}/{sequence_name}/gt": wandb.Image(img_gt)}, commit=False
             )
             self.wandb.log(
-                {f"{sequence_name}/pred_masks": wandb.Image(img_pm)}, commit=False
+                {f"{global_step}/{sequence_name}/pred_boxes": wandb.Image(img_pb)},
+                commit=False,
             )
+            self.wandb.log(
+                {f"{global_step}/{sequence_name}/pred_masks": wandb.Image(img_pm)},
+                commit=False,
+            )
+        self.success(f"Wrote images in images/{global_step}/{sequence_name}")
 
 
 def parser_to_dict(parser: argparse.Namespace) -> Dict[str, Any]:

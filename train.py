@@ -268,6 +268,7 @@ def train_engine(config: dict):
                         if config["INFERENCE_ONLY_DETR"] is not None
                         else config["ONLY_DETR"]
                     ),
+                    epoch=epoch,
                 )
                 eval_metrics.sync()
                 logger.metrics(

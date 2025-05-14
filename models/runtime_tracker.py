@@ -1,14 +1,15 @@
 # Copyright (c) Ruopeng Gao. All Rights Reserved.
 
-import torch
 import einops
+import torch
 from scipy.optimize import linear_sum_assignment
+from torch.nn.functional import interpolate
 
+from models.misc import get_model
 from structures.instances import Instances
 from structures.ordered_set import OrderedSet
-from utils.misc import distributed_device
 from utils.box_ops import box_cxcywh_to_xywh
-from models.misc import get_model
+from utils.misc import distributed_device
 
 
 class RuntimeTracker:
@@ -106,9 +107,17 @@ class RuntimeTracker:
     @torch.no_grad()
     def update(self, image):
         detr_out = self.model(frames=image, part="detr")
-        scores, categories, boxes, output_embeds = self._get_activate_detections(
-            detr_out=detr_out
+        scores, categories, boxes, raw_masks, output_embeds = (
+            self._get_activate_detections(detr_out=detr_out)
         )
+        # upsample and threshold raw_masks
+        H, W = image.tensors.shape[-2:]
+        masks = interpolate(
+            raw_masks.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False
+        ).squeeze(0)
+        masks = masks.sigmoid() > 0.5
+        # keep only active masks (parallel to boxes)
+        masks = masks[: boxes.shape[0]]
         if self.only_detr:
             id_pred_labels = self.num_id_vocabulary * torch.ones(
                 boxes.shape[0], dtype=torch.int64, device=boxes.device
@@ -126,6 +135,7 @@ class RuntimeTracker:
         boxes = boxes[keep_idxs]
         output_embeds = output_embeds[keep_idxs]
         id_pred_labels = id_pred_labels[keep_idxs]
+        masks = masks[keep_idxs]
 
         # A hack implementation, before assign new id labels, update the id_queue to ensure the uniqueness of id labels:
         n_activate_id_labels = 0
@@ -169,6 +179,7 @@ class RuntimeTracker:
             "category": categories,
             # "bbox": boxes * self.bbox_unnorm,
             "bbox": box_cxcywh_to_xywh(boxes) * self.bbox_unnorm,
+            "masks": masks,
             "id": torch.tensor(
                 [self.id_label_to_id[_] for _ in id_labels.tolist()],
                 dtype=torch.int64,
@@ -195,6 +206,7 @@ class RuntimeTracker:
     def _get_activate_detections(self, detr_out: dict):
         logits = detr_out["pred_logits"][0]
         boxes = detr_out["pred_boxes"][0]
+        masks = detr_out.get("pred_masks", [])[0]
         output_embeds = detr_out["outputs"][0]
         scores = logits.sigmoid()
         scores, categories = torch.max(scores, dim=-1)
@@ -203,10 +215,15 @@ class RuntimeTracker:
         # Selecting:
         # logits = logits[activate_indices]
         boxes = boxes[activate_indices]
+        masks = (
+            masks[activate_indices]
+            if masks is not None
+            else torch.zeros((boxes.shape[0], 0, 0))
+        )
         output_embeds = output_embeds[activate_indices]
         scores = scores[activate_indices]
         categories = categories[activate_indices]
-        return scores, categories, boxes, output_embeds
+        return scores, categories, boxes, masks, output_embeds
 
     def _get_id_pred_labels(self, boxes: torch.Tensor, output_embeds: torch.Tensor):
         if self.trajectory_features.shape[0] == 0:
