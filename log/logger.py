@@ -365,6 +365,8 @@ class Logger:
             color = rand_color(obj_id)
             # paste mask
             mask = Image.open(mask_path).convert("L").resize((W, H))
+            if mask.getextrema() == (0, 1):
+                mask = mask.point(lambda p: 255 * p)
             overlay = Image.new("RGBA", (W, H), color + (128,))
             img_gt.paste(overlay, (0, 0), mask)
             # draw box + id

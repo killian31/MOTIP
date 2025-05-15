@@ -253,8 +253,7 @@ def submit_and_evaluate_one_model(
         )
 
         if seq_idx < max_log:
-            #TODO fix last sequence only is logged
-            #print(sequence_name)
+            #TODO fix last sequence only is logged when multi_gpu enabled?
             mid_frame = len(sequence_loader) // 2
             gt_ann = gt_annotations[sequence_name][mid_frame]
             pred_ann = sequence_results[mid_frame]
