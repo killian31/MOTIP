@@ -41,7 +41,7 @@ class HungarianMatcher(nn.Module):
         self.cost_giou = cost_giou
         assert (
             cost_class != 0 or cost_bbox != 0 or cost_giou != 0
-        ), "all costs cant be 0"
+        ), "all costs can't be 0"
 
     def forward(self, outputs, targets):
         """Performs the matching
@@ -90,7 +90,7 @@ class HungarianMatcher(nn.Module):
             # Compute the L1 cost between boxes
             cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
 
-            # Compute the giou cost betwen boxes
+            # Compute the giou cost between boxes
             cost_giou = -generalized_box_iou(
                 box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox)
             )

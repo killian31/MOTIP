@@ -97,10 +97,12 @@ def accuracy(output, target, topk=(1,)):
 
 def load_detr_pretrain(
     model: nn.Module,
-    pretrain_path: str,
+    pretrain_path: str | None,
     num_classes: int | None,
     default_class_idx: int | None = None,
 ):
+    if pretrain_path is None:
+        return
     pretrain_model = torch.load(
         pretrain_path, map_location=lambda storage, loc: storage, weights_only=False
     )

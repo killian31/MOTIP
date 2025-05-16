@@ -2,17 +2,26 @@
 
 import copy
 import math
-import torch
-import einops
 import random
-from torchvision.transforms import v2
-import torchvision.transforms as T
 from math import floor
+
+import einops
+import numpy as np
+import torch
+import torchvision.transforms as T
 from PIL import Image
+from torchvision.transforms import v2
 from triton.language import dtype
 
 from utils.box_ops import box_xywh_to_xyxy, box_xyxy_to_cxcywh
+
 from .util import is_legal
+
+
+def _load_mask_as_tensor(path: str) -> torch.Tensor:
+    """Load a binary PNG into a bool tensor CHW=(1,H,W)."""
+    m = Image.open(path).convert("L")
+    return (torch.as_tensor(np.array(m)) > 0)[None]
 
 
 class MultiIdentity:
@@ -81,6 +90,13 @@ class MultiSimulate:
                     _ann["bbox"] = _bbox
                 for _field in _need_to_select_fields:
                     _ann[_field] = _ann[_field][_legal_idxs]
+                if "masks" in _ann:
+                    # (a) keep only masks of legal objects
+                    _ann["masks"] = _ann["masks"][_legal_idxs]
+                    # (b) crop by same window
+                    _ann["masks"] = v2.functional.crop(
+                        _ann["masks"].float(), _i, _j, _h, _w
+                    ).bool()
                 _ann["is_legal"] = is_legal(_ann)
                 _image = v2.functional.crop(_image, _i, _j, _h, _w)
                 # Resize:
@@ -89,6 +105,12 @@ class MultiSimulate:
                 _bbox_ratio = torch.tensor([_w_ratio, _h_ratio] * 2)
                 _ann["bbox"] = _ann["bbox"] * _bbox_ratio
                 _image = v2.functional.resize(_image, [h, w])
+                if "masks" in _ann:
+                    _ann["masks"] = v2.functional.resize(
+                        _ann["masks"].float(),
+                        [h, w],
+                        interpolation=v2.InterpolationMode.NEAREST,
+                    ).bool()
                 # Put into the shifted sequence:
                 shifted_images.append(_image)
                 shifted_annotations.append(_ann)
@@ -171,6 +193,10 @@ class MultiRandomHorizontalFlip:
                 annotation["bbox"] = annotation["bbox"][
                     :, [2, 1, 0, 3]
                 ] * torch.as_tensor([-1, 1, -1, 1]) + torch.as_tensor([w, 0, w, 0])
+                if "masks" in annotation:
+                    annotation["masks"] = v2.functional.horizontal_flip_image(
+                        annotation["masks"].float()
+                    ).bool()
         return images, annotations, metas
 
 
@@ -234,6 +260,11 @@ class MultiRandomResize:
             annotation["bbox"] = annotation["bbox"] * torch.as_tensor(
                 [scale_ratio_x, scale_ratio_y] * 2
             )
+            if "masks" in annotation:
+                annotation["masks"] = v2.functional.resize(
+                    annotation["masks"].float(), new_hw
+                ).bool()
+
         return images, annotations, metas
 
 
@@ -275,6 +306,10 @@ class MultiRandomCrop:
             for _field in _need_to_select_fields:
                 _annotation[_field] = _annotation[_field][_legal_idxs]
             _annotation["is_legal"] = is_legal(_annotation)
+            if "masks" in _annotation:
+                _annotation["masks"] = v2.functional.crop(
+                    _annotation["masks"].float(), _i, _j, _h, _w
+                ).bool()
 
         # Check all annotations' legality:
         _is_legals = torch.tensor(
@@ -343,6 +378,23 @@ class MultiToTensor:
         if isinstance(images, list):
             assert isinstance(images[0], Image.Image)
             images = [v2.functional.to_image(_) for _ in images]
+        return images, annotations, metas
+
+
+class MultiLoadMasks:
+    """Replace mask_paths with a tensor stack (N,H,W)."""
+
+    def __call__(self, images, annotations, metas):
+        for ann in annotations:
+            if "mask_paths" not in ann:
+                continue
+            masks = [_load_mask_as_tensor(p) for p in ann["mask_paths"]]
+            if len(masks):
+                ann["masks"] = torch.cat(masks, dim=0)  # (N,H,W)
+            else:
+                h, w = images.shape[-2:]
+                ann["masks"] = torch.zeros((0, h, w), dtype=torch.bool)
+            del ann["mask_paths"]
         return images, annotations, metas
 
 
@@ -706,6 +758,7 @@ def build_transforms(config: dict):
                 else MultiRandomPhotometricDistort()
             ),
             MultiToTensor(),
+            # MultiLoadMasks(),
             MultiStack(),
             # MultiToDtype(torch.float32),
             # MultiNormalize(mean=mean, std=std),

@@ -259,15 +259,20 @@ class DeformableTransformer(nn.Module):
 
         inter_references_out = inter_references
         lengths = (spatial_shapes[:, 0] * spatial_shapes[:, 1]).tolist()
-        offset = sum(lengths[:-1])
-        last_memory = memory[:, offset : offset + lengths[-1], :]
+        reshaped_memory = []
+        start = 0
+        for (h_lvl, w_lvl), lvl_len in zip(spatial_shapes.tolist(), lengths):
+            mem = memory[:, start : start + lvl_len, :]  # (bs, lvl_len, c)
+            mem = mem.permute(0, 2, 1).view(bs, c, h_lvl, w_lvl)  # (bs, c, h, w)
+            reshaped_memory.append(mem)
+            start += lvl_len
         if self.two_stage:
             raise RuntimeError(f"You should not use 'two stage'.")
             return (
                 hs,
                 init_reference_out,
                 inter_references_out,
-                last_memory.permute(0, 2, 1).view(bs, c, h, w),
+                reshaped_memory,
                 enc_outputs_class,
                 enc_outputs_coord_unact,
             )
@@ -275,7 +280,7 @@ class DeformableTransformer(nn.Module):
             hs,
             init_reference_out,
             inter_references_out,
-            last_memory.permute(0, 2, 1).view(bs, c, h, w),
+            reshaped_memory,
             None,
             None,
         )

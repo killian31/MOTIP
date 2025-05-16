@@ -236,9 +236,13 @@ class DeformableDETR(nn.Module):
         outputs_coord = torch.stack(outputs_coords)
 
         if self.masks:
-            bs = features[-1].tensors.shape[0]
-            src_proj = srcs[-1]
-            bbox_mask = self.bbox_attention(hs[-1], memory, mask=masks[-1])
+            feat_index = -2
+            bs = features[feat_index].tensors.shape[0]
+            src_proj = srcs[feat_index]
+            bbox_mask = self.bbox_attention(
+                hs[feat_index], memory[feat_index], mask=masks[feat_index]
+            )
+            print("bbox_mask variance over Q:", bbox_mask.var(dim=1).mean().item())
             seg_masks = self.mask_head(
                 src_proj,
                 bbox_mask,
@@ -247,7 +251,6 @@ class DeformableDETR(nn.Module):
             output_seg_masks = seg_masks.view(
                 bs, self.num_queries, seg_masks.shape[-2], seg_masks.shape[-1]
             )
-
         out = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}
         if self.masks:
             out["pred_masks"] = output_seg_masks

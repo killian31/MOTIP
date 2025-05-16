@@ -116,8 +116,6 @@ class RuntimeTracker:
             raw_masks.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False
         ).squeeze(0)
         masks = masks.sigmoid() > 0.5
-        # keep only active masks (parallel to boxes)
-        masks = masks[: boxes.shape[0]]
         if self.only_detr:
             id_pred_labels = self.num_id_vocabulary * torch.ones(
                 boxes.shape[0], dtype=torch.int64, device=boxes.device
@@ -164,6 +162,7 @@ class RuntimeTracker:
             boxes = boxes[keep_idxs]
             output_embeds = output_embeds[keep_idxs]
             id_pred_labels = id_pred_labels[keep_idxs]
+            masks = masks[keep_idxs]
         pass
 
         # Assign new id labels:

@@ -4,9 +4,11 @@
 
 import copy
 from collections import defaultdict
+from functools import lru_cache
 
+import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 from torch.utils.data import Dataset
 
 from .bft import BFT
@@ -184,6 +186,18 @@ class JointDataset(Dataset):
             self.annotations[dataset][split][sequence][frame_idx]
             for frame_idx in frame_idxs
         ]  # "bbox", "category", "id", "visibility", "is_legal"
+        for frame_idx, annotation in zip(frame_idxs, annotations):
+            if "mask_paths" in annotation:
+                mask_paths = annotation["mask_paths"]
+                masks = []
+                for mask_path in mask_paths:
+                    mask = self._load_mask(mask_path)
+                    masks.append(mask)
+                if masks:
+                    annotation["masks"] = torch.stack(masks)
+                else:
+                    H, W = images[frame_idx].height, images[frame_idx].width
+                    annotation["masks"] = torch.zeros((0, H, W), dtype=torch.bool)
         # Get metas:
         metas = [
             {
@@ -208,6 +222,29 @@ class JointDataset(Dataset):
             images, annotations, metas = self.transforms(images, annotations, metas)
         # from .tools import visualize_a_batch
         # visualize_a_batch(images, annotations)
+        # for i in range(len(annotations[0]["bbox"])):
+        #     box = annotations[0]["bbox"][i]
+        #     cx, cy, w, h = (
+        #         int(box[0] * images.shape[-1]),
+        #         int(box[1] * images.shape[-2]),
+        #         int(box[2] * images.shape[-1]),
+        #         int(box[3] * images.shape[-2]),
+        #     )
+        #     x1, y1 = cx - w // 2, cy - h // 2
+        #     x2, y2 = cx + w // 2, cy + h // 2
+
+        #     image = images.squeeze(0).permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+        #     mask = annotations[0]["masks"][i].cpu().numpy()
+        #     overlay = np.zeros_like(image)
+        #     overlay[:, :, 1] = (mask * 255).astype(np.uint8)  # green channel
+        #     overlay = np.where(mask[:, :, np.newaxis], overlay, image)
+        #     img = Image.fromarray(overlay)
+        #     draw = ImageDraw.Draw(img)
+        #     draw.rectangle((x1, y1, x2, y2), outline=(0, 0, 255), width=2)
+
+        #     # save the image
+        #     img.save(f"image_with_box_and_mask_obj_{i}.png")
+
         return images, annotations, metas
 
     def statistics(self):
@@ -229,3 +266,9 @@ class JointDataset(Dataset):
                     f"{dataset}.{split}, {num_sequences} sequences, {num_frames} frames."
                 )
         return statistics
+
+    @staticmethod
+    @lru_cache(maxsize=1024)
+    def _load_mask(path: str) -> torch.Tensor:
+        arr = np.asarray(Image.open(path).convert("L")) > 0
+        return torch.from_numpy(arr).to(torch.bool)

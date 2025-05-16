@@ -399,7 +399,7 @@ class Logger:
             # draw id
             # approximate box from mask
             xs, ys = mask_arr.nonzero(as_tuple=True)
-            if xs.size and ys.size:
+            if xs.size and ys.size and xs.numel():
                 x0, y0 = ys.min(), xs.min()
                 draw3.text((x0, y0 - 10), str(obj_id), fill=color, font=font)
 

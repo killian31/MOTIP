@@ -5,6 +5,7 @@ from functools import lru_cache
 import einops
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 
 from utils.nested_tensor import nested_tensor_from_tensor_list
@@ -63,12 +64,6 @@ def append_annotation(
     return annotation
 
 
-@lru_cache(maxsize=1024)
-def _load_mask(path: str) -> torch.Tensor:
-    arr = np.asarray(Image.open(path).convert("L")) > 0
-    return torch.from_numpy(arr).to(torch.bool)
-
-
 def collate_fn(batch):
     images, annotations, metas = zip(*batch)  # (B, T, ...)
     _B = len(batch)
@@ -90,41 +85,40 @@ def collate_fn(batch):
     # max_N = max(
     #    annotation[0]["trajectory_id_labels"].shape[-1] for annotation in annotations
     # )
-    max_N, first_mask_path = 0, None
+    max_N = 0
     for video in annotations:
         for frame in video:
             max_N = max(
                 max_N,
                 frame["trajectory_id_labels"].shape[-1],
-                len(frame.get("mask_paths", [])),
+                frame.get("masks", torch.zeros(0)).shape[0],
             )
-            if first_mask_path is None and frame.get("mask_paths"):
-                first_mask_path = frame["mask_paths"][0]
+    H, W = nested_tensor.tensors.shape[-2:]
 
-    if first_mask_path is None:
-        raise RuntimeError("Batch contains no mask paths.")
-    H, W = Image.open(first_mask_path).size[::-1]
     # Padding the ID annotations:
     for b in range(len(annotations)):
         for t in range(len(annotations[b])):
             frame = annotations[b][t]
             _G, _, _N = frame["trajectory_id_labels"].shape
-            paths = frame.get("mask_paths", [])
-            masks = (
-                torch.stack([_load_mask(p) for p in paths])
-                if paths
-                else torch.zeros((0, H, W), dtype=torch.bool)
-            )
-            if masks.shape[0] < max_N:
-                masks = torch.cat(
-                    [
-                        masks,
-                        torch.zeros((max_N - masks.shape[0], H, W), dtype=torch.bool),
-                    ],
-                    0,
-                )
-            frame["masks"] = masks  # (max_N, H, W)
-
+            # pad masks
+            masks = frame["masks"]  # bool tensor (N, h0, w0)
+            if masks.numel():  # non-empty
+                masks = (
+                    F.interpolate(
+                        masks.unsqueeze(1).float(),  # (N,1,h0,w0)
+                        size=(H, W),
+                        mode="nearest",
+                    )
+                    .squeeze(1)
+                    .to(torch.bool)
+                )  # back to (N, H, W)
+            else:
+                masks = torch.zeros((0, H, W), dtype=torch.bool)
+            n = masks.shape[0]
+            if n < max_N:
+                pad = torch.zeros((max_N - n, H, W), dtype=torch.bool)
+                masks = torch.cat([masks, pad], 0)
+            frame["masks"] = masks
             if _N < max_N:  # pad all ID-related tensors
                 pad_ids = -torch.ones((_G, 1, max_N - _N), dtype=torch.int64)
                 pad_bool = torch.ones((_G, 1, max_N - _N), dtype=torch.bool)

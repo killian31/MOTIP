@@ -106,6 +106,7 @@ def train_engine(config: dict):
 
     # Build MOTIP model:
     model, detr_criterion = build_motip(config=config)
+    pretrain_detr = config["DETR_PRETRAIN"] is not None
     # Load the pre-trained DETR:
     load_detr_pretrain(
         model=model,
@@ -117,7 +118,10 @@ def train_engine(config: dict):
             else None
         ),
     )
-    logger.success(log=f"Load the pre-trained DETR from '{config['DETR_PRETRAIN']}'. ")
+    if pretrain_detr:
+        logger.success(
+            log=f"Load the pre-trained DETR from '{config['DETR_PRETRAIN']}'. "
+        )
     # Build Loss Function:
     id_criterion = build_id_criterion(config=config)
 
@@ -498,6 +502,21 @@ def train_one_epoch(
             targets=detr_targets_flatten,
             batch_len=detr_criterion_batch_len,
         )
+
+        from PIL import Image
+
+        bool_mask = (detr_train_outputs["pred_masks"][0].sigmoid() > 0.5)[0]
+        rgb_mask = torch.zeros(
+            (bool_mask.shape[0], bool_mask.shape[1], 3),
+            dtype=torch.uint8,
+            device="cuda",
+        )
+        rgb_mask[bool_mask, :] = torch.tensor(
+            [0, 255, 0], dtype=torch.uint8, device="cuda"
+        )
+        rgb_mask_np = rgb_mask.cpu().numpy()
+        img = Image.fromarray(rgb_mask_np)
+        img.save("mask.png")
 
         # Whether to only train the DETR, OR to train the MOTIP together:
         if not only_detr:

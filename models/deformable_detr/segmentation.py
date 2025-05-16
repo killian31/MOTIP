@@ -89,13 +89,14 @@ class MaskHeadSmallConv(nn.Module):
 
     def __init__(self, dim, fpn_dims, context_dim):
         super().__init__()
-
+        self.mask_scale = nn.Parameter(torch.tensor(50.0))
         inter_dims = [
             dim,
             context_dim // 2,
             context_dim // 4,
             context_dim // 8,
             context_dim // 16,
+            context_dim // 32,
             context_dim // 64,
         ]
         self.lay1 = torch.nn.Conv2d(dim, dim, 3, padding=1)
@@ -108,6 +109,11 @@ class MaskHeadSmallConv(nn.Module):
         self.gn4 = torch.nn.GroupNorm(8, inter_dims[3])
         self.lay5 = torch.nn.Conv2d(inter_dims[3], inter_dims[4], 3, padding=1)
         self.gn5 = torch.nn.GroupNorm(8, inter_dims[4])
+
+        self.up1 = nn.ConvTranspose2d(inter_dims[4], inter_dims[4], 4, 2, 1)
+        # self.gn_up1 = nn.GroupNorm(8, inter_dims[4])
+        # self.up2 = nn.ConvTranspose2d(inter_dims[4], inter_dims[5], 4, 2, 1)
+        # self.gn_up2 = nn.GroupNorm(8, inter_dims[5])
         self.out_lay = torch.nn.Conv2d(inter_dims[4], 1, 3, padding=1)
 
         self.dim = dim
@@ -117,15 +123,15 @@ class MaskHeadSmallConv(nn.Module):
         self.adapter3 = torch.nn.Conv2d(fpn_dims[2], inter_dims[3], 1)
 
         for m in self.modules():
-            if isinstance(m, nn.Conv2d):
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
                 nn.init.kaiming_uniform_(m.weight, a=1)
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x, bbox_mask, fpns):
         def expand(tensor, length):
             return tensor.unsqueeze(1).repeat(1, int(length), 1, 1, 1).flatten(0, 1)
-
-        x = torch.cat([expand(x, bbox_mask.shape[1]), bbox_mask.flatten(0, 1)], 1)
+        mask_flat = bbox_mask.flatten(0, 1) * self.mask_scale
+        x = torch.cat([expand(x, bbox_mask.shape[1]), mask_flat], 1)
         x = self.lay1(x)
         x = self.gn1(x)
         x = F.relu(x)
@@ -155,7 +161,16 @@ class MaskHeadSmallConv(nn.Module):
         x = self.gn5(x)
         x = F.relu(x)
 
+        # x = self.up1(x)
+        # x = self.gn_up1(x)
+        # x = F.relu(x)
+
+        # x = self.up2(x)
+        # x = self.gn_up2(x)
+        # x = F.relu(x)
+
         x = self.out_lay(x)
+        
         return x
 
 
@@ -193,7 +208,9 @@ class MHAttentionMap(nn.Module):
             k.shape[-1],
         )
         weights = torch.einsum("bqnc,bnchw->bqnhw", qh * self.normalize_fact, kh)
-
+        # tau = 0.07
+        # raw_logits = torch.einsum("bqnc,bnchw->bqnhw", qh, kh)
+        # weights = raw_logits / tau
         if mask is not None:
             weights.masked_fill_(mask.unsqueeze(1).unsqueeze(1), float("-inf"))
         weights = F.softmax(weights.flatten(2), dim=-1).view_as(weights)
